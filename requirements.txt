@@ -6,3 +6,4 @@ scikit-learn>=1.4.0
 numpy>=1.26.0
 opencv-python-headless>=4.9.0
 tf-keras>=2.16.0
+python-multipart
