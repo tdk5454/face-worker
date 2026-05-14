@@ -1,19 +1,21 @@
-"""
-face-worker/main.py
-Railway'de çalışır. Upstash Redis kuyruğunu dinler,
-gelen fotoğrafı model.pkl ile analiz eder, sonucu yazar.
-"""
-
-import os, asyncio, base64, json, pickle
+import os
+import asyncio
+import base64
+import json
+import pickle
 import numpy as np
 from fastapi import FastAPI
 from deepface import DeepFace
 from sklearn.preprocessing import normalize
 from redis.asyncio import from_url
 
-app   = FastAPI()
-redis = from_url(os.environ["UPSTASH_REDIS_URL"])
+app = FastAPI()
 
+# Redis bağlantısı
+redis_url = os.environ.get("UPSTASH_REDIS_URL")
+redis = from_url(redis_url)
+
+# Model yükleme
 with open("model.pkl", "rb") as f:
     md = pickle.load(f)
 
@@ -42,33 +44,37 @@ def predict(img_bytes: bytes) -> dict:
             "score":  round(float(probs[idx]), 3)
         }
     except Exception as e:
-        return {"face": False, "person": "Başka biri", "score": 0.0, "error": str(e)}
+        return {"face": False, "person": "Bilinmiyor", "score": 0.0, "error": str(e)}
 
 async def worker_loop():
-    print("Worker başladı...")
+    print("Worker döngüsü başladı, kuyruk dinleniyor...", flush=True)
     while True:
         try:
-            item = await redis.brpop("face_queue", timeout=5)
+            item = await redis.brpop("face_queue", timeout=10)
             if not item:
                 continue
-            _, raw    = item
-            job       = json.loads(raw)
-            job_id    = job["job_id"]
+            
+            _, raw = item
+            job = json.loads(raw)
+            job_id = job["job_id"]
             img_bytes = base64.b64decode(job["image_b64"])
 
-            print(f"[{job_id}] işleniyor...")
+            print(f"[{job_id}] İşlem başlıyor...", flush=True)
             result = predict(img_bytes)
+            
+            # Sonucu 5 dakika (300sn) sakla
             await redis.setex(f"result:{job_id}", 300, json.dumps(result))
-            print(f"[{job_id}] → {result}")
-
+            print(f"[{job_id}] Bitti -> {result['person']}", flush=True)
+            
         except Exception as e:
-            print(f"Hata: {e}")
+            print(f"Worker Hatası: {str(e)}", flush=True)
             await asyncio.sleep(2)
 
 @app.on_event("startup")
-async def startup():
+async def startup_event():
+    print("Railway sistemi kalkıyor...", flush=True)
     asyncio.create_task(worker_loop())
 
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
+@app.get("/")
+async def root():
+    return {"status": "active", "info": "Face Worker is running"}
